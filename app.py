@@ -111,7 +111,7 @@ page_bg_color = '''
 
 col1, col2 = st.columns([1, 2])
 with col1:
-    st.image('/Users/alejandrosantamaria/code/drdro1/canopy_watch/streamlit/pics/canopy_watch_logo.png', width=200, use_container_width=False)
+    st.image('pics/canopy_watch_logo.png', width=200, use_container_width=False)
 with col2:
     st.title("Canopy Watch")
 
