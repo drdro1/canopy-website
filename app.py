@@ -4,23 +4,32 @@ import streamlit as st
 from PIL import Image
 from pathlib import Path
 import io
+import os
 import requests
 import base64
 
-PERCENT_MODEL_URL = "https://y-602911369526.europe-west1.run.app/predict-percent"
-MASK_MODEL_URL = "https://y-602911369526.europe-west1.run.app/predict-mask"
+PERCENT_MODEL_URL = "https://canopy-602911369526.europe-west1.run.app/predict-percent"
+MASK_MODEL_URL = "https://canopy-602911369526.europe-west1.run.app/predict-mask"
+# PERCENT_MODEL_URL = "http://localhost:8000/predict-percent"
+# MASK_MODEL_URL = "http://localhost:8000/predict-mask"
 
-if "show_top" not in st.session_state:
-    st.session_state.show_top = True
-    st.session_state.project_type = 'Deforestation Project'
-    st.session_state.selected_image_name = None
-    st.session_state.selected_image = None
-    st.session_state.selected_mask = None
-    st.session_state.percent_model_result = None
 
 def encode_image_to_base64(image_path):
     with open(image_path, "rb") as img_file:
         return base64.b64encode(img_file.read()).decode("utf-8")
+
+def save_variable_to_file(variable_name, variable_value):
+    file_path = os.path.join(os.path.dirname(__file__), f"{variable_name}.txt")
+    with open(file_path, "w") as file:
+        file.write(str(variable_value))
+
+def load_variable_from_file(variable_name):
+    file_path = os.path.join(os.path.dirname(__file__), f"{variable_name}.txt")
+    if os.path.exists(file_path):
+        with open(file_path, "r") as file:
+            return file.read()
+    else:
+        return None
 
 def image_to_base64(img):
     buffered = io.BytesIO()
@@ -30,7 +39,7 @@ def image_to_base64(img):
 
 def get_image_files(country: str, type: str):
     dir_name = "pics/" + country + "_" + type
-    image_files = list(Path(dir_name).glob("*.jpeg"))
+    image_files = sorted(Path(dir_name).glob("*.jpeg"))
     return image_files
 
 def normalize_image(image):
@@ -60,7 +69,8 @@ def call_percent_model(image_path):
         return None
 
 def call_api_func(zone_name, image_files, button_col_value):
-    cols = st.columns(4)
+    cols = st.columns(len(image_files))
+    startEnd = 'Start'
     for col_id, col in enumerate(cols):
         image_path = image_files[col_id]
         number = col_id + 1
@@ -69,37 +79,34 @@ def call_api_func(zone_name, image_files, button_col_value):
             st.image(str(image_path), use_container_width=True)
             button_cols = st.columns([1, button_col_value])
             with button_cols[1]:  # Use the second (right) column
-                if st.button(f"{zone_name} {number}", key=f"{zone_name}_{number}"):
+                if st.button(f"{zone_name} {startEnd}", key=f"{zone_name}_{number}"):
                     st.session_state.selected_image_name = f'{zone_name} {number}'
-                    try:
-                        # Use ThreadPoolExecutor to call endpoints in parallel
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            # Submit both endpoint calls
-                            mask_future = executor.submit(call_mask_model, image_path)
-                            linear_future = executor.submit(call_percent_model, image_path)
 
-                            # Wait for and retrieve results
-                            mask_response = mask_future.result()
-                            percent_response = linear_future.result()
+                    with st.spinner("Predicting..."):
+                        response = requests.post(MASK_MODEL_URL, files={"file": open(image_path, "rb")})
 
-                        # Process mask model response
-                        if mask_response:
-                            st.session_state.selected_image = Image.open(str(image_path))
-                            st.session_state.selected_mask = Image.open(io.BytesIO(mask_response.content))
-                        else:
-                            st.error("Mask model API call failed")
+                    if response.status_code == 200:
+                        data = response.json()
 
-                        # Process second model response
-                        if percent_response:
-                            st.session_state.percent_model_result = percent_response.json()['pred']
-                        else:
-                            st.error("Second model API call failed")
+                        image_base64 = data["image"]
+                        image_data = base64.b64decode(image_base64)
 
+                        st.session_state.selected_image = Image.open(str(image_path))
+                        st.session_state.selected_mask = Image.open(io.BytesIO(image_data))
+                        st.session_state.percent_model_result = data["percent_cover"]
                         st.session_state.show_top = False
                         st.rerun()
+                    else:
+                        st.error(f"Error: {response.status_code}, {response.text}")
+            startEnd = 'End' if startEnd == 'Start' else 'Start'
 
-                    except Exception as e:
-                        st.error(f"Error: {e}")
+if "show_top" not in st.session_state:
+    st.session_state.show_top = True
+    st.session_state.project_type = load_variable_from_file('type')
+    st.session_state.selected_image_name = None
+    st.session_state.selected_image = None
+    st.session_state.selected_mask = None
+    st.session_state.percent_model_result = None
 
 page_bg_color = '''
 <style>
@@ -118,7 +125,8 @@ with col2:
     if st.session_state.show_top:
         st.session_state.project_type = st.radio(
         "Select Project Type",
-        ('Deforestation Project', 'Reforestation Project')
+        ('Deforestation Project', 'Reforestation Project'),
+        index=0 if st.session_state.project_type == 'Deforestation Project' else 1
         )
 
         st.markdown(
@@ -131,14 +139,20 @@ with col2:
 
 
 if st.session_state.show_top:
-    st.write(f"### Brazil")
-    call_api_func('Brazil', get_image_files('brazil', 'defo'), 5)
-    st.write(f"### Cameroon")
-    call_api_func('Cameroon', get_image_files('cameroon', 'defo'), 4)
-    st.write(f"### Mexico")
-    call_api_func('Mexico', get_image_files('mexico', 'refo'), 4)
-    st.write(f"### Peru")
-    call_api_func('Peru', get_image_files('peru', 'refo'), 4)
+    if st.session_state.project_type == 'Deforestation Project':
+        st.write(f"### Brazil")
+        call_api_func('Brazil', get_image_files('brazil', 'defo'), 5)
+        st.write(f"### Cameroon")
+        call_api_func('Cameroon', get_image_files('cameroon', 'defo'), 10)
+        st.write(f"### China")
+        call_api_func('China', get_image_files('china', 'defo'), 5)
+    else:
+        st.write(f"### France")
+        call_api_func('France', get_image_files('france', 'refo'), 5)
+        st.write(f"### Mexico")
+        call_api_func('Mexico', get_image_files('mexico', 'refo'), 5)
+        st.write(f"### Peru")
+        call_api_func('Peru', get_image_files('peru', 'refo'), 4)
 
 if not st.session_state.show_top:
     title = f'{st.session_state.project_type} : {st.session_state.selected_image_name}'
@@ -179,6 +193,7 @@ if not st.session_state.show_top:
         st.image(blended_image, width=300, caption="Blended Image")
     with col3:
         if st.button(f"Go Back"):
+            save_variable_to_file('type', st.session_state.project_type)
             st.session_state.show_top = True
             st.rerun()
 
